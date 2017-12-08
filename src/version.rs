@@ -386,6 +386,7 @@ mod tests {
     use super::Version;
     use super::Identifier;
     use super::SemVerError;
+    use version_req::VersionReq;
 
     #[test]
     fn test_parse() {
@@ -861,5 +862,218 @@ mod tests {
             "1.2.3 abc".parse(),
             parse_error("Extra junk after valid version:  abc")
         );
+    }
+
+    struct SemverTest(&'static str, &'static str, bool);
+
+    /// Declare range tests.
+    macro_rules! semver_tests {
+        ($(($($test:tt)*),)+) => {
+            [$(semver_tests!(@test $($test)*),)+]
+        };
+
+        (@test $req:expr, $version:expr) => {
+            SemverTest($req, $version, false)
+        };
+
+        (@test $req:expr, $version:expr, true) => {
+            SemverTest($req, $version, true)
+        };
+    }
+
+    /// Tests ported from:
+    /// https://raw.githubusercontent.com/npm/node-semver/master/test/index.js
+    #[test]
+    fn node_semver_comparisons() {
+        let input =
+            semver_tests![
+            ("0.0.0", "0.0.0-foo"),
+            ("0.0.1", "0.0.0"),
+            ("1.0.0", "0.9.9"),
+            ("0.10.0", "0.9.0"),
+            ("0.99.0", "0.10.0"),
+            ("2.0.0", "1.2.3"),
+            ("v0.0.0", "0.0.0-foo", true),
+            ("v0.0.1", "0.0.0", true),
+            ("v1.0.0", "0.9.9", true),
+            ("v0.10.0", "0.9.0", true),
+            ("v0.99.0", "0.10.0", true),
+            ("v2.0.0", "1.2.3", true),
+            ("0.0.0", "v0.0.0-foo", true),
+            ("0.0.1", "v0.0.0", true),
+            ("1.0.0", "v0.9.9", true),
+            ("0.10.0", "v0.9.0", true),
+            ("0.99.0", "v0.10.0", true),
+            ("2.0.0", "v1.2.3", true),
+            ("1.2.3", "1.2.3-asdf"),
+            ("1.2.3", "1.2.3-4"),
+            ("1.2.3", "1.2.3-4-foo"),
+            ("1.2.3-5-foo", "1.2.3-5"),
+            ("1.2.3-5", "1.2.3-4"),
+            ("1.2.3-5-foo", "1.2.3-5-Foo"),
+            ("3.0.0", "2.7.2+asdf"),
+            ("1.2.3-a.10", "1.2.3-a.5"),
+            ("1.2.3-a.b", "1.2.3-a.5"),
+            ("1.2.3-a.b", "1.2.3-a"),
+            ("1.2.3-a.b.c.10.d.5", "1.2.3-a.b.c.5.d.100"),
+            ("1.2.3-r2", "1.2.3-r100"),
+            ("1.2.3-r100", "1.2.3-R2"),
+        ];
+
+        for (i, &SemverTest(left, right, loose)) in input.into_iter().enumerate() {
+            // NOTE: we don't support loose parsing.
+            if loose {
+                continue;
+            }
+
+            let left = Version::parse(left)
+                .map_err(|e| format!("failed to parse: {}: {}", left, e))
+                .unwrap();
+
+            let right = Version::parse(right)
+                .map_err(|e| format!("failed to parse: {}: {}", right, e))
+                .unwrap();
+
+            assert!(left > right, "#{}: {} > {}", i, left, right);
+            assert!(!(left < right));
+            assert!(!(left <= right));
+            assert!(!(left == right));
+            assert!(left != right);
+        }
+    }
+
+    /// Tests ported from:
+    /// https://raw.githubusercontent.com/npm/node-semver/master/test/index.js
+    #[test]
+    fn node_semver_range() {
+        // NOTE: we support multiple predicates separated by comma (,) instead of spaces.
+        let input =
+            semver_tests![
+            // ("1.0.0 - 2.0.0", "1.2.3", ignore),
+            ("^1.2.3+build", "1.2.3"),
+            ("^1.2.3+build", "1.3.0"),
+            // NOTE: not supported.
+            // ("1.2.3-pre+asdf - 2.4.3-pre+asdf", "1.2.3"),
+            // ("1.2.3pre+asdf - 2.4.3-pre+asdf", "1.2.3", true),
+            // ("1.2.3-pre+asdf - 2.4.3pre+asdf", "1.2.3", true),
+            // ("1.2.3pre+asdf - 2.4.3pre+asdf", "1.2.3", true),
+            // ("1.2.3-pre+asdf - 2.4.3-pre+asdf", "1.2.3-pre.2"),
+            // ("1.2.3-pre+asdf - 2.4.3-pre+asdf", "2.4.3-alpha"),
+            // ("1.2.3+asdf - 2.4.3+asdf", "1.2.3"),
+            ("1.0.0", "1.0.0"),
+            (">=*", "0.2.4"),
+            ("", "1.0.0"),
+            ("*", "1.2.3"),
+            ("*", "v1.2.3", true),
+            (">=1.0.0", "1.0.0"),
+            (">=1.0.0", "1.0.1"),
+            (">=1.0.0", "1.1.0"),
+            (">1.0.0", "1.0.1"),
+            (">1.0.0", "1.1.0"),
+            ("<=2.0.0", "2.0.0"),
+            ("<=2.0.0", "1.9999.9999"),
+            ("<=2.0.0", "0.2.9"),
+            ("<2.0.0", "1.9999.9999"),
+            ("<2.0.0", "0.2.9"),
+            (">= 1.0.0", "1.0.0"),
+            (">=  1.0.0", "1.0.1"),
+            (">=   1.0.0", "1.1.0"),
+            ("> 1.0.0", "1.0.1"),
+            (">  1.0.0", "1.1.0"),
+            ("<=   2.0.0", "2.0.0"),
+            ("<= 2.0.0", "1.9999.9999"),
+            ("<=  2.0.0", "0.2.9"),
+            ("<    2.0.0", "1.9999.9999"),
+            ("<\t2.0.0", "0.2.9"),
+            (">=0.1.97", "v0.1.97", true),
+            (">=0.1.97", "0.1.97"),
+            // ("0.1.20 || 1.2.4", "1.2.4"),
+            // (">=0.2.3 || <0.0.1", "0.0.0"),
+            // (">=0.2.3 || <0.0.1", "0.2.3"),
+            // (">=0.2.3 || <0.0.1", "0.2.4"),
+            // ("||", "1.3.4"),
+            ("2.x.x", "2.1.3"),
+            ("1.2.x", "1.2.3"),
+            // ("1.2.x || 2.x", "2.1.3"),
+            // ("1.2.x || 2.x", "1.2.3"),
+            ("x", "1.2.3"),
+            ("2.*.*", "2.1.3"),
+            ("1.2.*", "1.2.3"),
+            // ("1.2.* || 2.*", "2.1.3"),
+            // ("1.2.* || 2.*", "1.2.3"),
+            ("*", "1.2.3"),
+            ("2", "2.1.2"),
+            ("2.3", "2.3.1"),
+            ("~x", "0.0.9"), // >=2.4.0 <2.5.0
+            ("~2", "2.0.9"), // >=2.4.0 <2.5.0
+            ("~2.4", "2.4.0"), // >=2.4.0 <2.5.0
+            ("~2.4", "2.4.5"),
+            // ("~>3.2.1", "3.2.2"), // >=3.2.1 <3.3.0,
+            ("~1", "1.2.3"), // >=1.0.0 <2.0.0
+            // ("~>1", "1.2.3"),
+            // ("~> 1", "1.2.3"),
+            ("~1.0", "1.0.2"), // >=1.0.0 <1.1.0,
+            ("~ 1.0", "1.0.2"),
+            ("~ 1.0.3", "1.0.12"),
+            (">=1", "1.0.0"),
+            (">= 1", "1.0.0"),
+            ("<1.2", "1.1.1"),
+            ("< 1.2", "1.1.1"),
+            // ("~v0.5.4-pre", "0.5.5"),
+            // ("~v0.5.4-pre", "0.5.4"),
+            ("=0.7.x", "0.7.2"),
+            // NOTE: mixing operations and wildcards are _not_ supported.
+            // ("<=0.7.x", "0.7.2"),
+            // (">=0.7.x", "0.7.2"),
+            // ("<=0.7.x", "0.6.2"),
+            ("~1.2.1, >=1.2.3", "1.2.3"),
+            ("~1.2.1, =1.2.3", "1.2.3"),
+            ("~1.2.1, 1.2.3", "1.2.3"),
+            ("~1.2.1, >=1.2.3, 1.2.3", "1.2.3"),
+            ("~1.2.1, 1.2.3, >=1.2.3", "1.2.3"),
+            ("~1.2.1, 1.2.3", "1.2.3"),
+            (">=1.2.1, 1.2.3", "1.2.3"),
+            ("1.2.3, >=1.2.1", "1.2.3"),
+            (">=1.2.3, >=1.2.1", "1.2.3"),
+            (">=1.2.1, >=1.2.3", "1.2.3"),
+            (">=1.2", "1.2.8"),
+            ("^1.2.3", "1.8.1"),
+            ("^0.1.2", "0.1.2"),
+            ("^0.1", "0.1.2"),
+            ("^0.0.1", "0.0.1"),
+            ("^1.2", "1.4.2"),
+            ("^1.2, ^1", "1.4.2"),
+            ("^1.2.3-alpha", "1.2.3-pre"),
+            ("^1.2.0-alpha", "1.2.0-pre"),
+            ("^0.0.1-alpha", "0.0.1-beta"),
+            ("^0.1.1-alpha", "0.1.1-beta"),
+            ("^x", "1.2.3"),
+            // ("x - 1.0.0", "0.9.7"),
+            // ("x - 1.x", "0.9.7"),
+            // ("1.0.0 - x", "1.9.7"),
+            // ("1.x - x", "1.9.7"),
+            // NOTE: mixing operations and wildcards are _not_ supported.
+            // ("<=7.x", "7.9.9"),
+        ];
+
+        for (i, &SemverTest(req, version, loose)) in input.into_iter().enumerate() {
+            // NOTE: loose mode not supported.
+            if loose {
+                continue;
+            }
+
+            let req = VersionReq::parse(req)
+                .map_err(|e| format!("{}: {}", e, req))
+                .unwrap();
+            let version = Version::parse(version).unwrap();
+
+            assert!(
+                req.matches(&version),
+                "#{}: ({}).matches({})",
+                i,
+                req,
+                version
+            );
+        }
     }
 }
